@@ -1,0 +1,9 @@
+# Solo se envía al constructor lo necesario; nunca secretos ni proyectos.
+**
+!package.json
+!src/
+!src/**
+!public/
+!public/**
+!Dockerfile
+!.dockerignore

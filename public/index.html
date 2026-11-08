@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Commit Gitea</title>
+    <link rel="icon" type="image/svg+xml" sizes="any" href="/favicon.svg?v=4">
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="header">
+      <div class="brand"><a class="brand-icon" href="/gitea" aria-label="Abrir Gitea">↗</a> Commit Gitea</div>
+      <div class="header-actions">
+        <button id="theme-toggle" type="button" aria-label="Modo oscuro" aria-pressed="false" title="Modo oscuro"><span aria-hidden="true">☾</span></button>
+        <button id="logout" type="button" aria-label="Cerrar sesión" title="Cerrar sesión"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M15 8l4 4-4 4M9 12h10"/></svg></button>
+      </div>
+    </header>
+    <main>
+      <section class="intro" aria-labelledby="title">
+        <div class="project-title">
+          <h1 id="title">Tus proyectos</h1>
+          <span id="title-branch" hidden></span>
+        </div>
+        <button id="refresh" type="button"><span aria-hidden="true">↻</span> Actualizar</button>
+      </section>
+      <section class="panel" aria-labelledby="folders-title" aria-busy="true" id="panel">
+        <div class="panel-heading">
+          <div><h2 id="folders-title">Carpetas <span id="count" class="count">—</span></h2></div>
+        </div>
+        <p id="status" role="status" aria-live="polite">Cargando carpetas…</p>
+        <ul id="folders" class="folders" aria-label="Carpetas disponibles"></ul>
+      </section>
+      <section id="project" class="panel project" hidden aria-labelledby="title">
+        <div class="panel-heading">
+          <div><button id="back" type="button">← Volver a carpetas</button><p id="git-state"></p></div>
+          <p id="project-status" role="status" aria-live="polite"></p>
+          <div class="project-actions"><button id="check-project" type="button" aria-label="Actualizar estado" title="Actualizar estado"><span aria-hidden="true">↻</span></button><button id="create-repo" type="button" hidden>Crear repositorio Gitea</button><button id="init-git" type="button" hidden>Iniciar .git</button></div>
+        </div>
+        <form id="commit-form" hidden>
+          <button id="commit-button" type="submit">Commit y push</button>
+          <textarea id="commit-message" name="message" rows="1" maxlength="4000" aria-label="Mensaje del commit (opcional)" placeholder="Mensaje opcional; si lo dejas vacío se usará Commit, fecha y hora"></textarea>
+        </form>
+        <section id="branches" hidden aria-labelledby="branches-title">
+          <h2 id="branches-title">Ramas</h2>
+          <p id="current-branch" role="status"></p>
+          <div class="branch-forms">
+          <form id="switch-branch-form">
+            <label for="branch-select">Cambiar a una rama</label>
+            <div class="branch-row"><select id="branch-select" required></select></div>
+          </form>
+          <form id="create-branch-form">
+            <label for="branch-name">Nueva rama desde la actual</label>
+            <div class="branch-row"><input id="branch-name" maxlength="255" required placeholder="ej. nueva-funcionalidad"><button type="submit">Crear y cambiar</button></div>
+          </form>
+          </div>
+        </section>
+        <section id="tags" hidden aria-labelledby="tags-title">
+          <h2 id="tags-title">Etiquetas</h2>
+          <p>Primero guarda y envía todos los cambios de la rama actual; después crea y envía la etiqueta. Los archivos ignorados no se incluyen.</p>
+          <form id="create-tag-form">
+            <label for="tag-name">Nombre de la etiqueta</label>
+            <div class="branch-row"><input id="tag-name" maxlength="255" required placeholder="ej. v1.0.0"><button type="submit">Crear y enviar a Gitea</button></div>
+          </form>
+        </section>
+        <section id="docker" hidden aria-labelledby="docker-title">
+          <h2 id="docker-title">Docker</h2>
+          <p>Construye el contenido actual de la carpeta, lo sube al registro de Gitea y elimina la imagen local. Necesita Dockerfile; usa .dockerignore para excluir secretos y archivos privados.</p>
+          <form id="docker-form">
+            <div class="docker-versions">
+              <div class="docker-version-field"><label for="docker-version">Versión desde las etiquetas</label><select id="docker-version"><option value=""></option></select></div>
+              <div class="docker-version-field"><label for="docker-manual">Versión manual</label><input id="docker-manual" maxlength="128" pattern="[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}" placeholder="ej. 1.0"></div>
+              <button class="docker-submit" type="submit">Construir y subir imagen</button>
+            </div>
+            <p id="docker-status" role="status" aria-live="polite"></p>
+            <progress id="docker-progress" hidden aria-label="Operación Docker en curso"></progress>
+            <pre id="docker-output" hidden aria-label="Salida de Docker" tabindex="0"></pre>
+          </form>
+        </section>
+      </section>
+    </main>
+  </body>
+</html>

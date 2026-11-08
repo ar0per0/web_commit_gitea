@@ -1,0 +1,13 @@
+{
+  "name": "web-commit-gitea",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interfaz web para gestionar carpetas de proyectos y futuras acciones de Gitea.",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  }
+}
