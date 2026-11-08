@@ -1,6 +1,6 @@
 services:
   commit_gitea:
-    image: ar0per0/web_commit_gitea:lastest
+    image: ar0per0/web_commit_gitea:latest
     init: true
     restart: unless-stopped
     user: "1000:1000"
