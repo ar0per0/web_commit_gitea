@@ -1,23 +1,20 @@
 services:
-  workspace:
-    build: .
-    image: web_commit_gitea:local
+  commit_gitea:
+    image: ar0per0/web_commit_gitea:lastest
     init: true
     restart: unless-stopped
-    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    user: "1000:1000"
     group_add:
-      - "${DOCKER_GID:-0}"
+      - "0"
     ports:
-      - "${WEB_BIND_IP:-127.0.0.1}:${WEB_PORT:-8804}:8804"
+      - "8804:8804"
     environment:
-      HOST: "0.0.0.0"
-      DATA_PATH: "/data"
-      TZ: "${TZ:-Europe/Madrid}"
-      WEB_PASSWORD: "${WEB_PASSWORD:?Configura WEB_PASSWORD en .env}"
-      GITEA_USER: "${GITEA_USER:-}"
-      GITEA_EMAIL: "${GITEA_EMAIL:-}"
-      GITEA_TOKEN: "${GITEA_TOKEN:-}"
-      GITEA_URL: "${GITEA_URL:-}"
+      TZ: "Europe/Madrid"
+      WEB_PASSWORD: "web_password"
+      GITEA_USER: "gitea_user"
+      GITEA_EMAIL: "gitea_email"
+      GITEA_TOKEN: "gitea_token"
+      GITEA_URL: "https://gitea.example.com/"
     volumes:
-      - "${DATA_PATH:-./data}:/data"
-      - "${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"
+      - "./data:/data"
+      - "/var/run/docker.sock:/var/run/docker.sock"
