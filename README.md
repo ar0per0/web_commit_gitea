@@ -2,7 +2,7 @@
 
 > Proyecto construido con **OpenCode + ChatGPT Codex**.
 
-Interfaz web para explorar las carpetas de primer nivel de una ruta local e inicializar sus repositorios Git y enviarlos a Gitea.
+Herramienta web para facilitar la gestión de repositorios Git en Gitea desde un panel centralizado, permitiendo realizar commits, gestionar ramas y etiquetas, y simplificar las operaciones habituales mediante una interfaz intuitiva y un despliegue con Docker.
 
 Captura de la aplicación:
 ![Captua](./captua_commit_gitea.png)
