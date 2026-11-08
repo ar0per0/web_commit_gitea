@@ -32,7 +32,7 @@ services:
       GITEA_TOKEN: "gitea_token"
       GITEA_URL: "https://gitea.example.com/"
       GITEA_REQUIRED: "true"
-	  SHOW_GITEA_PROJECTS: "true"
+      SHOW_GITEA_PROJECTS: "true"
     volumes:
       - "./data:/data"
       - "/var/run/docker.sock:/var/run/docker.sock"
