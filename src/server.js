@@ -2,11 +2,12 @@ import { createServer as createHttpServer } from 'node:http';
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { describeProject, initializeProject, projectPath, commitProject, listBranches, listTags, changeBranch, createTag } from './projects.js';
-import { publishImage } from './docker.js';
-import { repositoryExists, createRepository } from './gitea.js';
+import { describeProject, initializeProject, projectPath, commitProject, listBranches, listTags, changeBranch, createTag, cloneProject } from './projects.js';
+import { publishImage, imageRepository } from './docker.js';
+import { repositoryExists, createRepository, listRepositories } from './gitea.js';
 import { createAuth } from './auth.js';
 import { isSameOrigin } from './origin.js';
+import { logError } from './log.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const assets = {
@@ -16,10 +17,11 @@ const assets = {
   '/favicon.svg': ['favicon.svg', 'image/svg+xml'],
 };
 
-export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fetch, password } = {}) {
+export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fetch, giteaRequired = true, showGiteaProjects = true, password } = {}) {
   const directory = path.resolve(root, dataPath);
   const busy = new Set();
   const authenticate = password === undefined ? null : createAuth(password);
+  const reportError = (error, context) => logError(error, context, [gitea.token, password]);
 
   return createHttpServer(async (request, response) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -35,6 +37,29 @@ export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fet
     }
     const pathname = url.pathname;
     if (authenticate && await authenticate(request, response, pathname)) return;
+    if (pathname === '/api/gitea/clone') {
+      response.setHeader('Content-Type', 'application/json; charset=utf-8');
+      if (request.method !== 'POST') {
+        response.writeHead(405, { Allow: 'POST' });
+        response.end(JSON.stringify({ error: 'Método no permitido.' }));
+        return;
+      }
+      if (request.headers['x-requested-with'] !== 'GiteaWorkspace' || !isSameOrigin(request)) {
+        response.writeHead(403);
+        response.end(JSON.stringify({ error: 'Origen no permitido.' }));
+        return;
+      }
+      try {
+        if (!showGiteaProjects) throw Object.assign(new Error('El listado de proyectos de Gitea está desactivado.'), { status: 404 });
+        const result = await cloneProject(directory, url.searchParams.get('repository'), gitea);
+        response.end(JSON.stringify(result));
+      } catch (error) {
+        reportError(error, { method: request.method, path: pathname });
+        response.statusCode = error.status || 500;
+        response.end(JSON.stringify({ error: error.status ? error.message : 'No se puede descargar el proyecto. Comprueba la ruta y los permisos.' }));
+      }
+      return;
+    }
     if (['/api/folder', '/api/folder/init', '/api/folder/repository', '/api/folder/commit', '/api/folder/branches', '/api/folder/branch', '/api/folder/tag', '/api/folder/tags', '/api/folder/docker'].includes(pathname)) {
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
       const initialize = pathname === '/api/folder/init';
@@ -98,6 +123,10 @@ export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fet
             : await commitProject(directory, name, payload?.message, gitea);
         } else if (pathname === '/api/folder/tags') {
           result = await listTags(directory, name);
+          result.imageRepository = null;
+          if (result.current && gitea.url && gitea.user) {
+            try { result.imageRepository = imageRepository(gitea, name, result.current); } catch { /* Configuración incompleta. */ }
+          }
         } else if (pathname === '/api/folder/branches') {
           result = await listBranches(directory, name);
         } else if (createRemote) {
@@ -109,17 +138,18 @@ export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fet
           result = await initializeProject(directory, name, gitea);
         } else {
           result = await describeProject(directory, name);
-          if (!result.hasGit) {
-            try {
-              result.remoteExists = await repositoryExists(gitea, name, giteaFetch);
-            } catch (error) {
-              result.remoteExists = null;
-              result.remoteError = error.message;
-            }
+          result.giteaRequired = giteaRequired;
+          try {
+            result.remoteExists = await repositoryExists(gitea, name, giteaFetch);
+          } catch (error) {
+            reportError(error, { method: request.method, path: pathname, project: name, operation: 'consulta Gitea' });
+            result.remoteExists = null;
+            result.remoteError = error.message;
           }
         }
         response.end(JSON.stringify(result));
       } catch (error) {
+        reportError(error, { method: request.method, path: pathname, project: url.searchParams.get('name') });
         if (response.headersSent) {
           response.end(`${JSON.stringify({ error: error.status ? error.message : 'No se ha podido completar la operación Docker.' })}\n`);
           return;
@@ -134,6 +164,33 @@ export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fet
     if (request.method !== 'GET') {
       response.writeHead(405, { Allow: 'GET' });
       response.end('Método no permitido');
+      return;
+    }
+
+    if (pathname === '/api/config') {
+      response.setHeader('Content-Type', 'application/json; charset=utf-8');
+      response.end(JSON.stringify({ showGiteaProjects }));
+      return;
+    }
+
+    if (pathname === '/api/gitea/projects') {
+      response.setHeader('Content-Type', 'application/json; charset=utf-8');
+      if (!showGiteaProjects) {
+        response.writeHead(404);
+        response.end(JSON.stringify({ error: 'El listado de proyectos de Gitea está desactivado.' }));
+        return;
+      }
+      try {
+        const repositories = await listRepositories(gitea, giteaFetch);
+        const entries = await readdir(directory, { withFileTypes: true });
+        const localNames = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
+        const projects = repositories.filter((repo) => !localNames.has(repo.name.split('/').at(-1)));
+        response.end(JSON.stringify({ projects }));
+      } catch (error) {
+        reportError(error, { method: request.method, path: pathname });
+        response.statusCode = error.status || 502;
+        response.end(JSON.stringify({ error: error.status ? error.message : 'No se pueden consultar los proyectos de Gitea.' }));
+      }
       return;
     }
 
@@ -169,6 +226,7 @@ export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fet
           .sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }));
         response.end(JSON.stringify({ path: dataPath, folders }));
       } catch (error) {
+        reportError(error, { method: request.method, path: pathname, directory });
         response.statusCode = error.code === 'ENOENT' ? 404 : 500;
         response.end(JSON.stringify({
           path: dataPath,
@@ -190,7 +248,8 @@ export function createServer({ dataPath = './data', gitea = {}, giteaFetch = fet
       const content = await readFile(path.join(root, 'public', asset[0]));
       response.writeHead(200, { 'Content-Type': asset[1] });
       response.end(content);
-    } catch {
+    } catch (error) {
+      reportError(error, { method: request.method, path: pathname });
       response.writeHead(500);
       response.end('No se puede cargar la página.');
     }
@@ -206,6 +265,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const server = createServer({
     password: process.env.WEB_PASSWORD || '',
     dataPath: process.env.DATA_PATH || './data',
+    giteaRequired: process.env.GITEA_REQUIRED?.trim().toLowerCase() !== 'false',
+    showGiteaProjects: process.env.SHOW_GITEA_PROJECTS?.trim().toLowerCase() !== 'false',
     gitea: { user: process.env.GITEA_USER, email: process.env.GITEA_EMAIL, token: process.env.GITEA_TOKEN, url: process.env.GITEA_URL },
   });
   server.on('error', (error) => {

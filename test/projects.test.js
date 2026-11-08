@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { describeProject, initializeProject, projectPath, commitProject, listBranches, changeBranch, createTag } from '../src/projects.js';
+import { describeProject, initializeProject, projectPath, commitProject, listBranches, changeBranch, createTag, listTags } from '../src/projects.js';
 
 const exec = promisify(execFile);
 const config = { user: 'tester', email: 'tester@example.com', token: 'test-secret', url: 'https://gitea.example.com/' };
@@ -48,6 +48,66 @@ test('guarda y envía cambios antes de etiquetar; conserva etiquetas y permite r
   assert.equal((await exec('git', ['rev-parse', 'refs/tags/v1.0.0'], { cwd: project })).stdout, target);
   assert.equal(pushes.at(-1), 'refs/tags/v1.0.0:refs/tags/v1.0.0');
   assert.equal((await exec('git', ['rev-list', '--count', 'HEAD'], { cwd: project })).stdout.trim(), '2');
+});
+
+test('añade el prefijo de rama a las etiquetas salvo en main y conserva los reintentos', async (t) => {
+  const directory = await fixture(t);
+  const project = path.join(directory, 'proyecto');
+  const pushes = [];
+  const runner = async (command, args, options) => {
+    if (!args.includes('push')) return exec(command, args, options);
+    pushes.push(args.at(-1));
+  };
+  await initializeProject(directory, 'proyecto', config, runner);
+  await createTag(directory, 'proyecto', 'v1.0', config, runner);
+  assert.equal(pushes.at(-1), 'refs/tags/v1.0:refs/tags/v1.0');
+  for (const branch of ['prova', 'feature/prueba', 'master']) {
+    await exec('git', ['switch', '-c', branch], { cwd: project });
+    const tag = `${branch}-v1.0`;
+    const result = await createTag(directory, 'proyecto', 'v1.0', config, runner);
+    assert.ok(result.message.includes(`«${tag}»`));
+    assert.equal(pushes.at(-1), `refs/tags/${tag}:refs/tags/${tag}`);
+    const target = (await exec('git', ['rev-parse', `refs/tags/${tag}`], { cwd: project })).stdout;
+    await writeFile(path.join(project, 'pendiente.txt'), branch);
+    await createTag(directory, 'proyecto', 'v1.0', config, runner);
+    assert.equal((await exec('git', ['rev-parse', `refs/tags/${tag}`], { cwd: project })).stdout, target);
+    await assert.rejects(createTag(directory, 'proyecto', '-f', config, runner), { status: 400 });
+  }
+  await exec('git', ['switch', '--detach'], { cwd: project });
+  const before = pushes.length;
+  await assert.rejects(createTag(directory, 'proyecto', 'v2.0', config, runner), { status: 409 });
+  assert.equal(pushes.length, before);
+});
+
+test('consulta la última etiqueta de cada rama sin confundir etiquetas heredadas', async (t) => {
+  const directory = await fixture(t);
+  const project = path.join(directory, 'proyecto');
+  const runner = async (command, args, options) => {
+    if (!args.includes('push')) return exec(command, args, options);
+  };
+  await initializeProject(directory, 'proyecto', config, runner);
+  assert.deepEqual(await listTags(directory, 'proyecto'), { tags: [], current: 'main', latest: null });
+  await createTag(directory, 'proyecto', 'v1.0', config, runner);
+  assert.equal((await listTags(directory, 'proyecto')).latest, 'v1.0');
+  await exec('git', ['switch', '-c', 'prova'], { cwd: project });
+  assert.equal((await listTags(directory, 'proyecto')).latest, null);
+  assert.deepEqual((await listTags(directory, 'proyecto')).tags, []);
+  await createTag(directory, 'proyecto', 'v1.0', config, runner);
+  assert.equal((await listTags(directory, 'proyecto')).latest, 'prova-v1.0');
+  assert.deepEqual((await listTags(directory, 'proyecto')).tags, ['prova-v1.0']);
+  await writeFile(path.join(project, 'nuevo.txt'), 'otra versión');
+  await createTag(directory, 'proyecto', 'v2.0', config, runner);
+  // Fija fechas distintas para que la prueba no dependa de la resolución de un segundo de Git.
+  await exec('git', ['tag', '-a', 'prova-v3.0', '-m', 'Nueva versión'], {
+    cwd: project, env: { ...process.env, GIT_COMMITTER_DATE: '2030-01-01T00:00:00Z' },
+  });
+  assert.equal((await listTags(directory, 'proyecto')).latest, 'prova-v3.0');
+  await exec('git', ['switch', 'main'], { cwd: project });
+  await exec('git', ['merge', '--ff-only', 'prova'], { cwd: project });
+  assert.equal((await listTags(directory, 'proyecto')).latest, 'v1.0');
+  assert.deepEqual((await listTags(directory, 'proyecto')).tags, ['v1.0']);
+  await exec('git', ['switch', '--detach'], { cwd: project });
+  assert.equal((await listTags(directory, 'proyecto')).latest, null);
 });
 
 test('crea y cambia ramas locales sin perder cambios ni aceptar nombres no válidos', async (t) => {

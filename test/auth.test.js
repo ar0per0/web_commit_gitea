@@ -22,7 +22,7 @@ test('protege web y API y recuerda el acceso con una cookie de 30 días', async 
   assert.match(loginPage, /aria-label="Iniciar sesión"/);
   assert.doesNotMatch(loginPage, /Workspace|workspace|auth-eyebrow/);
   assert.doesNotMatch(loginPage, /TU ESPACIO DE TRABAJO|Todo listo para empezar|Introduce tu contraseña|30 días|Tus proyectos, en un solo lugar|Accede a tus proyectos/);
-  assert.match(loginPage, /href="\/gitea"/);
+  assert.match(loginPage, /<a class="brand-icon" href="\/gitea" target="_blank" rel="noopener noreferrer"/);
   const giteaLink = await fetch(`${url}/gitea`, { redirect: 'manual' });
   assert.equal(giteaLink.status, 302);
   assert.equal(giteaLink.headers.get('location'), 'https://gitea.example.com/');
@@ -61,6 +61,7 @@ test('protege web y API y recuerda el acceso con una cookie de 30 días', async 
   assert.match(homePage, /Tus proyectos/);
   assert.match(homePage, /rel="icon" type="image\/svg\+xml" sizes="any" href="\/favicon.svg\?v=4"/);
   assert.match(homePage, /<\/a> Commit Gitea<\/div>/);
+  assert.match(homePage, /<a class="brand-icon" href="\/gitea" target="_blank" rel="noopener noreferrer"/);
   assert.doesNotMatch(homePage, /Workspace/);
   assert.equal((await fetch(`${url}/api/folders`, { headers })).status, 200);
   assert.equal((await fetch(`${url}/api/folders`, { headers: { Cookie: `${headers.Cookie}bad` } })).status, 401);

@@ -14,6 +14,72 @@ async function start(t, dataPath, options = {}) {
   return `http://127.0.0.1:${server.address().port}`;
 }
 
+test('configuración y listado remoto desactivado no consultan Gitea', async (t) => {
+  const url = await start(t, './data', {
+    showGiteaProjects: false,
+    giteaFetch: async () => assert.fail('No debe consultar Gitea'),
+  });
+  assert.deepEqual(await (await fetch(`${url}/api/config`)).json(), { showGiteaProjects: false });
+  assert.equal((await fetch(`${url}/api/gitea/projects`)).status, 404);
+  assert.equal((await fetch(`${url}/api/gitea/clone?repository=org/repo`, {
+    method: 'POST', headers: { 'X-Requested-With': 'GiteaWorkspace' },
+  })).status, 404);
+});
+
+test('protege el clonado frente a métodos, orígenes y rutas inválidos', async (t) => {
+  const url = await start(t, './data');
+  const endpoint = `${url}/api/gitea/clone?repository=org/..`;
+  assert.equal((await fetch(endpoint)).status, 405);
+  assert.equal((await fetch(endpoint, { method: 'POST' })).status, 403);
+  assert.equal((await fetch(endpoint, {
+    method: 'POST', headers: { 'X-Requested-With': 'GiteaWorkspace', Origin: 'https://otro.test' },
+  })).status, 403);
+  assert.equal((await fetch(endpoint, {
+    method: 'POST', headers: { 'X-Requested-With': 'GiteaWorkspace' },
+  })).status, 400);
+});
+
+test('sirve el listado remoto y rechaza métodos de escritura', async (t) => {
+  let calls = 0;
+  const url = await start(t, './data', {
+    gitea: { url: 'https://gitea.example.com/', user: 'tester', token: 'secret' },
+    giteaFetch: async () => {
+      calls++;
+      return Response.json([{ name: 'remoto', owner: { login: 'org' } }], { headers: { 'x-total-count': '1' } });
+    },
+  });
+  assert.deepEqual(await (await fetch(`${url}/api/config`)).json(), { showGiteaProjects: true });
+  assert.equal(calls, 0);
+  const page = await (await fetch(url)).text();
+  assert.match(page, /<details id="gitea-projects" class="panel" hidden>/);
+  assert.deepEqual(await (await fetch(`${url}/api/gitea/projects`)).json(), {
+    projects: [{ name: 'org/remoto', url: 'https://gitea.example.com/org/remoto' }],
+  });
+  assert.equal(calls, 1);
+  assert.equal((await fetch(`${url}/api/gitea/projects`, { method: 'POST' })).status, 405);
+});
+
+test('oculta repositorios con el mismo nombre que una carpeta local de cualquier propietario', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'gitea-web-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, 'existente'));
+  await writeFile(path.join(directory, 'pendiente'), 'no es carpeta');
+  const url = await start(t, directory, {
+    gitea: { url: 'https://gitea.example.com/', user: 'tester', token: 'secret' },
+    giteaFetch: async () => Response.json([
+      { name: 'existente', owner: { login: 'tester' } },
+      { name: 'existente', owner: { login: 'org' } },
+      { name: 'pendiente', owner: { login: 'org' } },
+    ], { headers: { 'x-total-count': '3' } }),
+  });
+  assert.deepEqual((await (await fetch(`${url}/api/gitea/projects`)).json()).projects, [
+    { name: 'org/pendiente', url: 'https://gitea.example.com/org/pendiente' },
+  ]);
+  await rm(path.join(directory, 'pendiente'));
+  await mkdir(path.join(directory, 'pendiente'));
+  assert.deepEqual((await (await fetch(`${url}/api/gitea/projects`)).json()).projects, []);
+});
+
 test('muestra solo directorios del primer nivel, ordenados, y permite actualizar', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'gitea-web-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -90,7 +156,7 @@ test('el enlace Gitea redirige a la URL configurada y rechaza destinos inválido
   }
 });
 
-test('consulta Gitea solo si no existe .git local, sea directorio o archivo', async (t) => {
+test('consulta Gitea aunque exista .git local, sea directorio o archivo', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'gitea-web-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(path.join(directory, 'con-git', '.git'), { recursive: true });
@@ -110,13 +176,38 @@ test('consulta Gitea solo si no existe .git local, sea directorio o archivo', as
     assert.equal(response.status, 200);
     const data = await response.json();
     assert.equal(data.hasGit, true);
-    assert.equal(data.remoteExists, undefined);
+    assert.equal(data.giteaRequired, true);
+    assert.equal(data.remoteExists, false);
   }
-  assert.equal(requests, 0);
+  assert.equal(requests, 2);
   const data = await (await fetch(`${url}/api/folder?name=sin-git`)).json();
   assert.equal(data.hasGit, false);
   assert.equal(data.remoteExists, false);
-  assert.equal(requests, 1);
+  assert.equal(requests, 3);
+});
+
+test('permite desactivar el requisito de Gitea sin omitir su consulta', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'gitea-optional-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await mkdir(path.join(directory, 'proyecto', '.git'), { recursive: true });
+  for (const status of [200, 404, 500]) {
+    let requests = 0;
+    const url = await start(t, directory, {
+      giteaRequired: false,
+      gitea: { url: 'https://gitea.example.com/', user: 'tester', token: 'test' },
+      giteaFetch: async () => {
+        requests++;
+        return new Response(null, { status });
+      },
+    });
+    const response = await fetch(`${url}/api/folder?name=proyecto`);
+    assert.equal(response.status, 200);
+    const data = await response.json();
+    assert.equal(data.hasGit, true);
+    assert.equal(data.giteaRequired, false);
+    assert.equal(data.remoteExists, status === 500 ? null : status === 200);
+    assert.equal(requests, 1);
+  }
 });
 test('protege las operaciones de ramas y valida sus peticiones', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'gitea-branches-'));

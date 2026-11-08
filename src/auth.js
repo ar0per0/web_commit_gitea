@@ -56,7 +56,7 @@ export function createAuth(password, { now = Date.now } = {}) {
   </head>
   <body class="auth-page">
     <main class="auth-layout">
-      <div class="brand auth-brand"><a class="brand-icon" href="/gitea" aria-label="Abrir Gitea">↗</a> Commit Gitea</div>
+      <div class="brand auth-brand"><a class="brand-icon" href="/gitea" target="_blank" rel="noopener noreferrer" aria-label="Abrir Gitea">↗</a> Commit Gitea</div>
       <section class="auth-card" aria-label="Iniciar sesión">
         <div class="auth-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></div>
         <form class="auth-form" method="post" action="/login">

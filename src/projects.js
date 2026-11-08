@@ -1,10 +1,48 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { lstat, realpath, readdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { lstat, realpath, readdir, mkdtemp, writeFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const exec = promisify(execFile);
+
+export async function cloneProject(directory, repository, config, run = exec) {
+  const parts = typeof repository === 'string' ? repository.split('/') : [];
+  if (parts.length !== 2 || parts.some((part) => !/^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(part))) {
+    throw Object.assign(new Error('Repositorio no válido.'), { status: 400 });
+  }
+  let remote;
+  try {
+    remote = new URL(config.url);
+    if (remote.protocol !== 'https:' || remote.username || remote.password || remote.search || remote.hash || !config.user || !config.token) throw new Error();
+    remote.pathname = `${remote.pathname.replace(/\/$/, '')}/${parts.map(encodeURIComponent).join('/')}.git`;
+  } catch {
+    throw Object.assign(new Error('Configura GITEA_URL (HTTPS), GITEA_USER y GITEA_TOKEN.'), { status: 400 });
+  }
+  const target = path.join(await realpath(directory), parts[1]);
+  try { await mkdir(target); } catch (error) {
+    if (error.code === 'EEXIST') throw Object.assign(new Error('Ya existe una carpeta con ese nombre. No se ha sobrescrito.'), { status: 409 });
+    throw error;
+  }
+  let temporary;
+  try {
+    temporary = await mkdtemp(path.join(tmpdir(), 'gitea-auth-'));
+    const askpass = path.join(temporary, 'askpass.sh');
+    await writeFile(askpass, '#!/bin/sh\ncase "$1" in\n  *Username*) printf "%s\\n" "$GITEA_AUTH_USER" ;;\n  *) printf "%s\\n" "$GITEA_AUTH_TOKEN" ;;\nesac\n', { mode: 0o700 });
+    const env = { ...process.env };
+    for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
+    Object.assign(env, { GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: askpass, GITEA_AUTH_USER: config.user, GITEA_AUTH_TOKEN: config.token });
+    await run('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'credential.helper=', '-c', 'http.followRedirects=false', 'clone', '--', remote.href, '.'], {
+      cwd: target, env, timeout: 600_000, maxBuffer: 1024 * 1024,
+    });
+    return { name: parts[1], message: `Proyecto descargado en ${parts[1]}.` };
+  } catch (cause) {
+    await rm(target, { recursive: true, force: true });
+    throw Object.assign(new Error('No se ha podido clonar el repositorio. Comprueba la conexión y los permisos del token.', { cause }), { status: 502 });
+  } finally {
+    if (temporary) await rm(temporary, { recursive: true, force: true });
+  }
+}
 // La configuración local no debe publicar etiquetas/submódulos adicionales ni activar mirror.
 const pushOptions = ['-c', 'remote.origin.mirror=false', '-c', 'push.followTags=false', '-c', 'push.recurseSubmodules=no', '-c', 'http.followRedirects=false'];
 
@@ -29,8 +67,8 @@ async function branchGit(directory, name, run) {
   try {
     const top = await git(['rev-parse', '--show-toplevel']);
     if (await realpath(top.stdout.trim()) !== project) throw new Error();
-  } catch {
-    throw Object.assign(new Error('No se puede comprobar el repositorio Git de esta carpeta.'), { status: 409 });
+  } catch (cause) {
+    throw Object.assign(new Error('No se puede comprobar el repositorio Git de esta carpeta.', { cause }), { status: 409 });
   }
   return git;
 }
@@ -39,9 +77,21 @@ export async function listTags(directory, name, run = exec) {
   const git = await branchGit(directory, name, run);
   try {
     const result = await git(['for-each-ref', '--sort=-creatordate', '--format=%(refname:strip=2)', 'refs/tags/']);
-    return { tags: result.stdout.trim().split('\n').filter(Boolean) };
-  } catch {
-    throw Object.assign(new Error('No se pueden consultar las etiquetas locales.'), { status: 409 });
+    const { current, branches } = await listBranches(directory, name, run);
+    const prefixes = branches.filter((branch) => branch !== 'main').map((branch) => `${branch}-`).sort((a, b) => b.length - a.length);
+    const belongsToCurrent = (tag) => {
+      const prefix = prefixes.find((prefix) => tag.startsWith(prefix));
+      return Boolean(current) && (current === 'main' ? !prefix : prefix === `${current}-`);
+    };
+    const tags = result.stdout.trim().split('\n').filter(Boolean).filter(belongsToCurrent);
+    let latest = null;
+    if (current) {
+      const merged = await git(['for-each-ref', '--merged=HEAD', '--sort=-creatordate', '--format=%(refname:strip=2)', 'refs/tags/']);
+      latest = merged.stdout.trim().split('\n').filter(Boolean).find(belongsToCurrent) || null;
+    }
+    return { tags, current, latest };
+  } catch (cause) {
+    throw Object.assign(new Error('No se pueden consultar las etiquetas locales.', { cause }), { status: 409 });
   }
 }
 
@@ -52,8 +102,8 @@ export async function listBranches(directory, name, run = exec) {
     let current = null;
     try { current = (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim(); } catch { /* HEAD separado. */ }
     return { current, branches: result.stdout.trim().split('\n').filter(Boolean) };
-  } catch {
-    throw Object.assign(new Error('No se pueden consultar las ramas locales.'), { status: 409 });
+  } catch (cause) {
+    throw Object.assign(new Error('No se pueden consultar las ramas locales.', { cause }), { status: 409 });
   }
 }
 
@@ -62,8 +112,8 @@ export async function changeBranch(directory, name, branch, create = false, conf
     throw Object.assign(new Error('Escribe un nombre de rama válido.'), { status: 400 });
   }
   const git = await branchGit(directory, name, run);
-  try { await git(['check-ref-format', `refs/heads/${branch}`]); } catch {
-    throw Object.assign(new Error('Nombre de rama no válido. No uses espacios ni caracteres especiales de Git.'), { status: 400 });
+  try { await git(['check-ref-format', `refs/heads/${branch}`]); } catch (cause) {
+    throw Object.assign(new Error('Nombre de rama no válido. No uses espacios ni caracteres especiales de Git.', { cause }), { status: 400 });
   }
   const { branches, current } = await listBranches(directory, name, run);
   if (create ? branches.includes(branch) : !branches.includes(branch)) {
@@ -84,13 +134,13 @@ export async function changeBranch(directory, name, branch, create = false, conf
     if (create) {
       try {
         await commitProject(directory, name, `Publicar rama ${branch}`, config, run, true);
-      } catch {
-        throw Object.assign(new Error(`La rama «${branch}» está creada y seleccionada localmente, pero ha fallado su push. La rama anterior y sus commits ya se enviaron. Reintenta el envío de la nueva rama con «Commit y push». No se ha borrado ni revertido nada.`), { status: 502 });
+      } catch (cause) {
+        throw Object.assign(new Error(`La rama «${branch}» está creada y seleccionada localmente, pero ha fallado su push. La rama anterior y sus commits ya se enviaron. Reintenta el envío de la nueva rama con «Commit y push». No se ha borrado ni revertido nada.`, { cause }), { status: 502 });
       }
     }
   } catch (error) {
     if (error.status) throw error;
-    throw Object.assign(new Error(`No se ha podido ${step}. Los cambios y cualquier commit automático se conservan; no se ha forzado el cambio de rama. Comprueba el repositorio y que la rama no esté abierta en otro worktree.`), { status: 409 });
+    throw Object.assign(new Error(`No se ha podido ${step}. Los cambios y cualquier commit automático se conservan; no se ha forzado el cambio de rama. Comprueba el repositorio y que la rama no esté abierta en otro worktree.`, { cause: error }), { status: 409 });
   }
   return { message: `${committed ? 'Commit automático creado. ' : ''}Rama «${current}» enviada a Gitea. ${create ? `Rama «${branch}» creada, seleccionada y enviada a Gitea.` : `Ahora estás en la rama «${branch}».`}`, committed };
 }
@@ -100,8 +150,19 @@ export async function createTag(directory, name, tag, config, run = exec) {
     throw Object.assign(new Error('Escribe un nombre de etiqueta válido.'), { status: 400 });
   }
   const git = await branchGit(directory, name, run);
-  try { await git(['check-ref-format', `refs/tags/${tag}`]); } catch {
-    throw Object.assign(new Error('Nombre de etiqueta no válido. No uses espacios ni caracteres especiales de Git.'), { status: 400 });
+  try { await git(['check-ref-format', `refs/tags/${tag}`]); } catch (cause) {
+    throw Object.assign(new Error('Nombre de etiqueta no válido. No uses espacios ni caracteres especiales de Git.', { cause }), { status: 400 });
+  }
+  let branch;
+  try {
+    branch = (await git(['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
+    if (!branch) throw new Error();
+  } catch (cause) {
+    throw Object.assign(new Error('HEAD está separado. Selecciona una rama antes de crear una etiqueta.', { cause }), { status: 409 });
+  }
+  if (branch !== 'main') tag = `${branch}-${tag}`;
+  try { await git(['check-ref-format', `refs/tags/${tag}`]); } catch (cause) {
+    throw Object.assign(new Error('El nombre de etiqueta con el prefijo de la rama no es válido.', { cause }), { status: 400 });
   }
   if (!config.user || !config.token || !config.url) {
     throw Object.assign(new Error('Configura GITEA_USER, GITEA_TOKEN y GITEA_URL.'), { status: 400 });
@@ -112,8 +173,8 @@ export async function createTag(directory, name, tag, config, run = exec) {
     expected.pathname = `${expected.pathname.replace(/\/$/, '')}/${encodeURIComponent(config.user)}/${encodeURIComponent(name)}.git`;
     await verifyRemote(git, expected.href);
     await git(['rev-parse', '--verify', 'HEAD^{commit}']);
-  } catch {
-    throw Object.assign(new Error('Comprueba que origin coincide con Gitea y que existe al menos un commit.'), { status: 409 });
+  } catch (cause) {
+    throw Object.assign(new Error('Comprueba que origin coincide con Gitea y que existe al menos un commit.', { cause }), { status: 409 });
   }
   const ref = `refs/tags/${tag}`;
   const existing = (await git(['for-each-ref', '--format=%(refname)', ref])).stdout.split('\n').includes(ref);
@@ -122,8 +183,8 @@ export async function createTag(directory, name, tag, config, run = exec) {
     if ((await git(['status', '--porcelain=v1', '--untracked-files=all'])).stdout) {
       throw Object.assign(new Error('Quedan cambios sin guardar. No se ha creado la etiqueta; los commits y envíos realizados se conservan.'), { status: 409 });
     }
-    try { await git(['-c', 'tag.gpgsign=false', 'tag', '--no-sign', '--', tag, 'HEAD']); } catch {
-      throw Object.assign(new Error('No se ha podido crear la etiqueta. Comprueba si el nombre entra en conflicto con otra etiqueta.'), { status: 409 });
+    try { await git(['-c', 'tag.gpgsign=false', 'tag', '--no-sign', '--', tag, 'HEAD']); } catch (cause) {
+      throw Object.assign(new Error('No se ha podido crear la etiqueta. Comprueba si el nombre entra en conflicto con otra etiqueta.', { cause }), { status: 409 });
     }
   }
   let temporary;
@@ -134,8 +195,8 @@ export async function createTag(directory, name, tag, config, run = exec) {
     await git([...pushOptions, '-c', 'credential.helper=', 'push', 'origin', `${ref}:${ref}`], {
       GIT_ASKPASS: askpass, GITEA_AUTH_USER: config.user, GITEA_AUTH_TOKEN: config.token,
     });
-  } catch {
-    throw Object.assign(new Error(`La etiqueta «${tag}» se conserva localmente, pero ha fallado su envío. Reintenta con el mismo nombre. No se sobrescriben etiquetas remotas.`), { status: 502 });
+  } catch (cause) {
+    throw Object.assign(new Error(`La etiqueta «${tag}» se conserva localmente, pero ha fallado su envío. Reintenta con el mismo nombre. No se sobrescriben etiquetas remotas.`, { cause }), { status: 502 });
   } finally {
     if (temporary) await rm(temporary, { recursive: true, force: true });
   }
@@ -194,8 +255,8 @@ export async function commitProject(directory, name, message, config, run = exec
     Object.assign(env, { GIT_ASKPASS: askpass, GITEA_AUTH_USER: config.user, GITEA_AUTH_TOKEN: config.token });
     await git([...pushOptions, '-c', 'credential.helper=', 'push', '-u', 'origin', `HEAD:refs/heads/${branch}`]);
     return { message: committed ? 'Commit creado y enviado a Gitea.' : 'No había cambios nuevos. Los commits pendientes se han enviado a Gitea.', committed };
-  } catch {
-    throw Object.assign(new Error(`Ha fallado ${step}. Comprueba origin, la rama, los permisos y la conexión. Los cambios y cualquier commit local se conservan. Puedes reintentar con el mismo botón; si no hay cambios nuevos, solo se enviarán los commits pendientes.`), { status: 500 });
+  } catch (cause) {
+    throw Object.assign(new Error(`Ha fallado ${step}. Comprueba origin, la rama, los permisos y la conexión. Los cambios y cualquier commit local se conservan. Puedes reintentar con el mismo botón; si no hay cambios nuevos, solo se enviarán los commits pendientes.`, { cause }), { status: 500 });
   } finally {
     if (temporary) await rm(temporary, { recursive: true, force: true });
   }
@@ -280,8 +341,8 @@ export async function initializeProject(directory, name, config, run = exec) {
           }), remote.href);
         }
         await run('git', ['-c', 'core.hooksPath=/dev/null', ...args], { cwd: project, env, timeout: 120_000, maxBuffer: 1024 * 1024 });
-      } catch {
-        throw Object.assign(new Error(`Ha fallado ${label}. Los pasos anteriores se conservan. Comprueba que Git está instalado, los permisos, la conexión y que el repositorio remoto existe y permite el acceso. Si ya se creó .git, no vuelvas a inicializarlo.`), { status: 500 });
+      } catch (cause) {
+        throw Object.assign(new Error(`Ha fallado ${label}. Los pasos anteriores se conservan. Comprueba que Git está instalado, los permisos, la conexión y que el repositorio remoto existe y permite el acceso. Si ya se creó .git, no vuelvas a inicializarlo.`, { cause }), { status: 500 });
       }
     }
     return { message: 'Repositorio inicializado y enviado a Gitea.', hasGit: true };

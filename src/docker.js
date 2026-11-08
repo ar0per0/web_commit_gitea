@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { projectPath } from './projects.js';
+import { projectPath, listBranches } from './projects.js';
 
 function runDocker(args, { cwd, env, input = '', onOutput = () => {} }) {
   return new Promise((resolve, reject) => {
@@ -26,6 +26,11 @@ function runDocker(args, { cwd, env, input = '', onOutput = () => {} }) {
   });
 }
 
+export function imageRepository(config, name, current) {
+  const registry = new URL(config.url).host;
+  return `${registry}/${config.user}/${current === 'main' ? name : `${name}__${current}`}`;
+}
+
 export async function publishImage(directory, name, version, config = {}, run = runDocker, onProgress = () => {}) {
   if (typeof version !== 'string' || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(version)) {
     throw Object.assign(new Error('Versión Docker no válida: usa hasta 128 letras, números, puntos, guiones o guiones bajos.'), { status: 400 });
@@ -46,7 +51,13 @@ export async function publishImage(directory, name, version, config = {}, run = 
   } catch {
     throw Object.assign(new Error('Comprueba GITEA_URL, GITEA_USER y GITEA_TOKEN. El usuario y la carpeta deben ser nombres Docker válidos en minúsculas.'), { status: 400 });
   }
-  const image = `${registry}/${config.user}/${name}:${version}`;
+  const { current } = await listBranches(directory, name);
+  if (!current) throw Object.assign(new Error('Selecciona una rama antes de construir la imagen Docker.'), { status: 409 });
+  const component = /^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/;
+  if (current !== 'main' && !component.test(current)) {
+    throw Object.assign(new Error('El nombre de la rama no es válido para Docker. Usa minúsculas, números y separadores de punto, guion o guion bajo.'), { status: 400 });
+  }
+  const image = `${imageRepository(config, name, current)}:${version}`;
   const temporary = await mkdtemp(path.join(tmpdir(), 'gitea-docker-'));
   const env = { ...process.env };
   delete env.GITEA_TOKEN;

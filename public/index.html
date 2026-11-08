@@ -11,7 +11,7 @@
   </head>
   <body>
     <header class="header">
-      <div class="brand"><a class="brand-icon" href="/gitea" aria-label="Abrir Gitea">↗</a> Commit Gitea</div>
+      <div class="brand"><a class="brand-icon" href="/gitea" target="_blank" rel="noopener noreferrer" aria-label="Abrir Gitea">↗</a> Commit Gitea</div>
       <div class="header-actions">
         <button id="theme-toggle" type="button" aria-label="Modo oscuro" aria-pressed="false" title="Modo oscuro"><span aria-hidden="true">☾</span></button>
         <button id="logout" type="button" aria-label="Cerrar sesión" title="Cerrar sesión"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M15 8l4 4-4 4M9 12h10"/></svg></button>
@@ -32,6 +32,15 @@
         <p id="status" role="status" aria-live="polite">Cargando carpetas…</p>
         <ul id="folders" class="folders" aria-label="Carpetas disponibles"></ul>
       </section>
+      <details id="gitea-projects" class="panel" hidden>
+        <summary>Proyectos de Gitea <span id="gitea-count" class="count">—</span></summary>
+        <div class="gitea-search">
+          <label for="gitea-search">Buscar por nombre del proyecto</label>
+          <input id="gitea-search" type="search" placeholder="Escribe el nombre del proyecto…" aria-controls="gitea-list">
+        </div>
+        <p id="gitea-status" role="status" aria-live="polite">Despliega el apartado para consultar los proyectos.</p>
+        <ul id="gitea-list" class="folders" aria-label="Proyectos disponibles en Gitea"></ul>
+      </details>
       <section id="project" class="panel project" hidden aria-labelledby="title">
         <div class="panel-heading">
           <div><button id="back" type="button">← Volver a carpetas</button><p id="git-state"></p></div>
@@ -58,10 +67,14 @@
         </section>
         <section id="tags" hidden aria-labelledby="tags-title">
           <h2 id="tags-title">Etiquetas</h2>
+          <p>En main se usa el texto tal cual (v1.0). En las demás ramas se añade su nombre como prefijo (prova-v1.0).</p>
           <p>Primero guarda y envía todos los cambios de la rama actual; después crea y envía la etiqueta. Los archivos ignorados no se incluyen.</p>
           <form id="create-tag-form">
-            <label for="tag-name">Nombre de la etiqueta</label>
-            <div class="branch-row"><input id="tag-name" maxlength="255" required placeholder="ej. v1.0.0"><button type="submit">Crear y enviar a Gitea</button></div>
+            <p id="latest-tag" aria-live="polite">Consultando última etiqueta…</p>
+            <div class="tag-name-field">
+              <label for="tag-name">Nombre de la etiqueta</label>
+              <div class="branch-row"><input id="tag-name" maxlength="255" required placeholder="ej. v1.0.0"><button type="submit">Crear y enviar a Gitea</button></div>
+            </div>
           </form>
         </section>
         <section id="docker" hidden aria-labelledby="docker-title">
@@ -73,6 +86,7 @@
               <div class="docker-version-field"><label for="docker-manual">Versión manual</label><input id="docker-manual" maxlength="128" pattern="[A-Za-z0-9_][A-Za-z0-9_.\-]{0,127}" placeholder="ej. 1.0"></div>
               <button class="docker-submit" type="submit">Construir y subir imagen</button>
             </div>
+            <p id="docker-image-preview" aria-live="polite" hidden></p>
             <p id="docker-status" role="status" aria-live="polite"></p>
             <progress id="docker-progress" hidden aria-label="Operación Docker en curso"></progress>
             <pre id="docker-output" hidden aria-label="Salida de Docker" tabindex="0"></pre>

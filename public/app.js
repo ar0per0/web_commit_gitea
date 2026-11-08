@@ -42,6 +42,119 @@ const status = document.querySelector('#status');
 const folders = document.querySelector('#folders');
 const count = document.querySelector('#count');
 const title = document.querySelector('#title');
+const giteaProjects = document.querySelector('#gitea-projects');
+const giteaStatus = document.querySelector('#gitea-status');
+const giteaCount = document.querySelector('#gitea-count');
+const giteaList = document.querySelector('#gitea-list');
+const giteaSearch = document.querySelector('#gitea-search');
+let showGiteaProjects = false;
+let giteaLoading = false;
+let giteaLoaded = false;
+
+function filterGiteaProjects() {
+  if (!giteaLoaded) return;
+  const query = giteaSearch.value.trim().toLocaleLowerCase();
+  let visible = 0;
+  for (const item of giteaList.children) {
+    item.hidden = !item.dataset.projectName.toLocaleLowerCase().includes(query);
+    if (!item.hidden) visible++;
+  }
+  giteaCount.textContent = visible;
+  giteaStatus.hidden = visible > 0;
+  giteaStatus.textContent = giteaList.children.length > 0
+    ? 'No hay proyectos que coincidan con la búsqueda.'
+    : 'No hay proyectos de Gitea pendientes de descargar.';
+}
+
+giteaSearch.addEventListener('input', filterGiteaProjects);
+
+async function loadGiteaProjects() {
+  if (!showGiteaProjects || !giteaProjects.open || giteaLoading) return;
+  giteaLoading = true;
+  giteaLoaded = false;
+  giteaProjects.setAttribute('aria-busy', 'true');
+  giteaStatus.hidden = false;
+  giteaStatus.className = '';
+  giteaStatus.textContent = 'Cargando proyectos de Gitea…';
+  giteaCount.textContent = '—';
+  giteaList.replaceChildren();
+  try {
+    const response = await fetch('/api/gitea/projects');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    for (const repo of data.projects) {
+      const projectName = repo.name.split('/').at(-1);
+      const item = document.createElement('li');
+      item.className = 'folder';
+      const link = document.createElement('a');
+      link.className = 'folder-link folder-name';
+      link.href = repo.url;
+      link.textContent = projectName;
+      const downloadStatus = document.createElement('span');
+      downloadStatus.className = 'download-status';
+      downloadStatus.setAttribute('role', 'status');
+      const download = document.createElement('button');
+      download.type = 'button';
+      download.className = 'download-project';
+      download.textContent = 'Descargar';
+      download.setAttribute('aria-label', `Descargar ${projectName}`);
+      download.addEventListener('click', async () => {
+        download.disabled = true;
+        download.textContent = 'Descargando…';
+        downloadStatus.className = 'download-status';
+        downloadStatus.textContent = `Clonando ${projectName}…`;
+        try {
+          const response = await fetch(`/api/gitea/clone?repository=${encodeURIComponent(repo.name)}`, {
+            method: 'POST', headers: { 'X-Requested-With': 'GiteaWorkspace' },
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error);
+          download.textContent = 'Descargado';
+          downloadStatus.textContent = result.message;
+          for (const row of Array.from(giteaList.children)) {
+            if (row.dataset.projectName === projectName) row.remove();
+          }
+          filterGiteaProjects();
+          loadFolders();
+        } catch (error) {
+          download.disabled = false;
+          download.textContent = 'Descargar';
+          downloadStatus.className = 'download-status error';
+          downloadStatus.textContent = error.message;
+        }
+      });
+      item.append(link, downloadStatus, download);
+      item.dataset.projectName = projectName;
+      giteaList.append(item);
+    }
+    giteaLoaded = true;
+    filterGiteaProjects();
+  } catch (error) {
+    giteaLoaded = false;
+    giteaStatus.className = 'error';
+    giteaStatus.textContent = `${error.message} Pulsa Actualizar para volver a intentarlo.`;
+  } finally {
+    giteaLoading = false;
+    giteaProjects.setAttribute('aria-busy', 'false');
+  }
+}
+
+giteaProjects.addEventListener('toggle', () => {
+  if (!giteaLoaded) loadGiteaProjects();
+});
+
+async function loadConfig() {
+  try {
+    const response = await fetch('/api/config');
+    if (!response.ok) return;
+    const config = await response.json();
+    showGiteaProjects = config.showGiteaProjects === true;
+    giteaProjects.hidden = !showGiteaProjects || panel.hidden;
+  } catch {
+    // Sin configuración no se consulta Gitea.
+  }
+}
+loadConfig();
 
 async function loadFolders() {
   refresh.disabled = true;
@@ -89,7 +202,10 @@ async function loadFolders() {
   }
 }
 
-refresh.addEventListener('click', loadFolders);
+refresh.addEventListener('click', () => {
+  loadFolders();
+  loadGiteaProjects();
+});
 loadFolders();
 
 const project = document.querySelector('#project');
@@ -111,11 +227,23 @@ const switchBranchForm = document.querySelector('#switch-branch-form');
 const createBranchForm = document.querySelector('#create-branch-form');
 const tagsPanel = document.querySelector('#tags');
 const tagName = document.querySelector('#tag-name');
+const latestTag = document.querySelector('#latest-tag');
 const createTagForm = document.querySelector('#create-tag-form');
 const dockerPanel = document.querySelector('#docker');
 const dockerForm = document.querySelector('#docker-form');
 const dockerVersion = document.querySelector('#docker-version');
 const dockerManual = document.querySelector('#docker-manual');
+const dockerImagePreview = document.querySelector('#docker-image-preview');
+let dockerImageRepository = null;
+
+function updateDockerImagePreview() {
+  const version = dockerManual.value.trim() || dockerVersion.value;
+  dockerImagePreview.hidden = !dockerImageRepository || !version;
+  dockerImagePreview.textContent = dockerImageRepository && version ? `Resultado nombre imagen: ${dockerImageRepository}:${version}` : '';
+}
+
+dockerVersion.addEventListener('change', updateDockerImagePreview);
+dockerManual.addEventListener('input', updateDockerImagePreview);
 const dockerStatus = document.querySelector('#docker-status');
 const dockerProgress = document.querySelector('#docker-progress');
 const dockerOutput = document.querySelector('#docker-output');
@@ -128,6 +256,9 @@ function disableBranchControls(disabled) {
 }
 
 async function loadTags(name) {
+  dockerImageRepository = null;
+  updateDockerImagePreview();
+  latestTag.textContent = 'Consultando última etiqueta…';
   const previous = dockerVersion.value;
   dockerVersion.replaceChildren();
   dockerVersion.append(new Option('', '', true, !previous));
@@ -136,16 +267,24 @@ async function loadTags(name) {
     const data = await response.json();
     if (selected !== name) return;
     if (!response.ok) throw new Error(data.error);
+    dockerImageRepository = data.imageRepository;
     for (const tag of data.tags) {
       const option = document.createElement('option');
-      option.value = tag;
+      option.value = data.current === 'main' ? tag : tag.slice(data.current.length + 1);
       option.textContent = tag;
-      option.selected = tag === previous;
+      option.selected = option.value === previous;
       dockerVersion.append(option);
     }
+    updateDockerImagePreview();
+    latestTag.textContent = !data.current ? 'Selecciona una rama para consultar su última etiqueta.'
+      : data.latest ? `Última etiqueta: ${data.latest}`
+        : 'No tiene etiquetas';
     if (!data.tags.length) dockerStatus.textContent = 'Sin etiquetas locales. Introduce una versión manual.';
   } catch (error) {
-    if (selected === name) dockerStatus.textContent = error.message;
+    if (selected === name) {
+      dockerStatus.textContent = error.message;
+      latestTag.textContent = `No se ha podido consultar la última etiqueta: ${error.message}`;
+    }
   }
 }
 
@@ -269,6 +408,7 @@ async function submitBranch(event, action) {
   } finally {
     branchBusy = false;
     await loadBranches(name);
+    await loadTags(name);
     commitButton.disabled = false;
     back.disabled = false;
     checkProject.disabled = false;
@@ -325,6 +465,7 @@ async function openProject(name, keepMessage = false) {
   titleBranch.hidden = true;
   document.querySelector('.intro').classList.add('project-intro');
   panel.hidden = true;
+  giteaProjects.hidden = true;
   project.hidden = false;
   refresh.hidden = true;
   title.textContent = name;
@@ -343,20 +484,23 @@ async function openProject(name, keepMessage = false) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     if (selected !== name) return;
-    const localState = 'Esta carpeta todavía no contiene .git.';
-    gitState.textContent = data.hasGit ? '' : data.remoteExists === null
+    const localState = data.hasGit ? '' : 'Esta carpeta todavía no contiene .git.';
+    gitState.textContent = data.remoteExists === null
       ? `${data.remoteError} ${localState}`
-      : `${data.remoteExists ? 'El repositorio existe en Gitea.' : 'El repositorio no existe en Gitea.'} ${localState}`;
+      : `${data.remoteExists ? '' : 'El repositorio no existe en Gitea.'} ${localState}`.trim();
     createRepo.hidden = data.remoteExists !== false;
     initGit.hidden = data.remoteExists !== true || data.hasGit;
-    commitForm.hidden = !data.hasGit;
-    tagsPanel.hidden = !data.hasGit;
+    const gitReady = data.hasGit && (data.giteaRequired === false || data.remoteExists === true);
+    commitForm.hidden = !gitReady;
+    tagsPanel.hidden = !gitReady;
     dockerPanel.hidden = !data.hasDockerfile;
-    if (data.hasGit) {
+    if (gitReady) {
       await Promise.all([loadBranches(name), loadTags(name)]);
     } else {
       disableBranchControls(branchBusy);
-      dockerStatus.textContent = 'Introduce una versión manual; no hay etiquetas Git locales.';
+      dockerStatus.textContent = data.hasGit
+        ? 'Introduce una versión manual; el repositorio en Gitea no está disponible.'
+        : 'Introduce una versión manual; no hay etiquetas Git locales.';
     }
   } catch (error) {
     if (selected !== name) return;
@@ -374,6 +518,7 @@ back.addEventListener('click', () => {
   document.querySelector('.brand-icon').href = '/gitea';
   project.hidden = true;
   panel.hidden = false;
+  giteaProjects.hidden = !showGiteaProjects;
   refresh.hidden = false;
   loadFolders();
 });

@@ -31,6 +31,8 @@ services:
       GITEA_EMAIL: "gitea_email"
       GITEA_TOKEN: "gitea_token"
       GITEA_URL: "https://gitea.example.com/"
+      GITEA_REQUIRED: "true"
+	  SHOW_GITEA_PROJECTS: "true"
     volumes:
       - "./data:/data"
       - "/var/run/docker.sock:/var/run/docker.sock"
@@ -67,6 +69,8 @@ Para ejecutar directamente necesitas Node.js 22 o superior y Git instalado en el
    GITEA_EMAIL=tu_email@example.com
    GITEA_TOKEN=
    GITEA_URL=https://gitea.example.com/
+   GITEA_REQUIRED=true
+   SHOW_GITEA_PROJECTS=true
    ```
 
    Se admiten rutas absolutas o relativas a la raíz del proyecto. Si hay espacios, usa comillas. Si no se configura, se utiliza `./data`. El directorio debe existir y tener permisos de lectura.
@@ -84,6 +88,20 @@ El botón **Actualizar** vuelve a leer las carpetas sin reiniciar. Los cambios e
 `.env` y el contenido de `data/` se excluyen de Git para no subir configuraciones locales ni proyectos ajenos.
 
 Las variables `GITEA_USER`, `GITEA_EMAIL`, `GITEA_TOKEN` y `GITEA_URL` se utilizan para inicializar y enviar los proyectos. El token solo se entrega a Git en el servidor mediante un script temporal de autenticación: no se guarda en la URL remota ni se envía al navegador. En Docker se inyecta la configuración en tiempo de ejecución y se monta el directorio de proyectos como volumen.
+
+`SHOW_GITEA_PROJECTS=true` (valor por defecto) muestra debajo de las carpetas el apartado «Proyectos de Gitea», plegado inicialmente. Al desplegarlo se consultan todos los repositorios accesibles al token, incluidos los de organizaciones y los que no tienen carpeta local, con enlaces a Gitea. «Actualizar» renueva el listado si está desplegado. «Descargar» ejecuta `git clone` en `DATA_PATH` (`/data` dentro de Docker), usando el nombre del repositorio como carpeta, sin sobrescribir carpetas existentes. Tras la descarga se actualizan las carpetas locales. Con `SHOW_GITEA_PROJECTS=false` se oculta el apartado y se deshabilitan sus consultas y descargas, sin alterar las operaciones de Gitea de las carpetas locales. Reinicia el servidor o recrea el contenedor tras cambiar la opción en `.env`.
+
+`GITEA_REQUIRED=true` (valor por defecto) exige que existan `.git` local y el repositorio en Gitea para mostrar commit/push, ramas y etiquetas. Con `GITEA_REQUIRED=false`, basta con que exista `.git` local, incluso si la consulta a Gitea falla. Gitea se sigue consultando y se ofrece crear el repositorio remoto si falta. Esta opción no cambia el destino ni la autenticación de las operaciones de envío, que siguen utilizando la configuración de Gitea. Reinicia el servidor o recrea el contenedor después de cambiarla.
+
+### Diagnóstico de errores
+
+Los errores de las operaciones se escriben en `stderr` como registros JSON con fecha, proyecto, ruta y detalles técnicos. Consulta los registros del contenedor con:
+
+```sh
+docker compose logs -f commit_gitea
+```
+
+Los fallos de Gitea incluyen método, URL, estado HTTP, identificador de petición si existe y cuerpo de respuesta. Los de Git conservan la causa original, comando, código de salida, `stdout` y `stderr`. Los tokens configurados, la contraseña web y las credenciales reconocibles se ocultan; no se registran las cabeceras de autenticación ni el entorno de los procesos. Los detalles técnicos no se envían al navegador. Los registros pueden contener rutas, nombres y mensajes del servidor remoto: compártelos solo después de revisarlos.
 
 ## Ejecutar con Docker Compose
 

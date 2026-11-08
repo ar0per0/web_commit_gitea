@@ -1,8 +1,43 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { repositoryExists, createRepository } from '../src/gitea.js';
+import { repositoryExists, createRepository, listRepositories } from '../src/gitea.js';
 
 const config = { url: 'https://gitea.example.com/', user: 'tester', token: 'secret-test' };
+
+test('lista todas las páginas y ordena repositorios de usuarios y organizaciones', async () => {
+  const pages = [];
+  const repos = await listRepositories({ ...config, url: 'https://gitea.example.com/sub/' }, async (url, options) => {
+    assert.equal(url.pathname, '/sub/api/v1/user/repos');
+    assert.equal(options.headers.Authorization, 'token secret-test');
+    assert.equal(url.searchParams.get('limit'), '50');
+    const page = Number(url.searchParams.get('page'));
+    pages.push(page);
+    // Una instancia puede limitar las páginas a menos de los 50 solicitados.
+    return Response.json(page === 1 ? [{ name: 'zeta', owner: { login: 'tester' } }]
+      : page === 2 ? [{ name: 'alfa', owner: { login: 'organizacion' } }] : []);
+  });
+  assert.deepEqual(pages, [1, 2, 3]);
+  assert.deepEqual(repos, [
+    { name: 'organizacion/alfa', url: 'https://gitea.example.com/sub/organizacion/alfa' },
+    { name: 'tester/zeta', url: 'https://gitea.example.com/sub/tester/zeta' },
+  ]);
+});
+
+test('listado vacío, fin por total y errores de Gitea', async () => {
+  assert.deepEqual(await listRepositories(config, async () => Response.json([])), []);
+  let calls = 0;
+  assert.equal((await listRepositories(config, async () => {
+    calls++;
+    return Response.json([{ name: 'repo', owner: { login: 'tester' } }], { headers: { 'x-total-count': '1' } });
+  })).length, 1);
+  assert.equal(calls, 1);
+  for (const status of [401, 403, 404, 500]) {
+    await assert.rejects(listRepositories(config, async () => new Response(null, { status })), { status: 502 });
+  }
+  for (const body of [null, {}, [{ name: 'sin-owner' }]]) {
+    await assert.rejects(listRepositories(config, async () => Response.json(body)), { status: 502 });
+  }
+});
 
 test('consulta el repositorio y distingue ausente de errores de autenticación', async () => {
   assert.equal(await repositoryExists(config, 'mi proyecto', async (url, options) => {
@@ -50,4 +85,22 @@ test('errores de red no revelan el token y configuración inválida no hace peti
   await assert.rejects(createRepository(config, 'repo', async (url) => {
     return url.pathname.endsWith('/user') ? Response.json(null) : new Response(null, { status: 404 });
   }), { status: 400 });
+});
+
+test('conserva el diagnóstico HTTP de creación sin revelar el token', async () => {
+  await assert.rejects(createRepository(config, 'repo', async (url) => {
+    if (url.pathname.includes('/repos/tester/')) return new Response(null, { status: 404 });
+    if (url.pathname.endsWith('/user')) return Response.json({ login: 'tester' });
+    return Response.json({ message: `insufficient scope ${config.token}` }, {
+      status: 403, headers: { 'x-request-id': 'request-123' },
+    });
+  }), (error) => {
+    assert.equal(error.details.method, 'POST');
+    assert.equal(error.details.url, 'https://gitea.example.com/api/v1/user/repos');
+    assert.equal(error.details.status, 403);
+    assert.equal(error.details.requestId, 'request-123');
+    assert.match(error.details.body, /insufficient scope/);
+    assert.doesNotMatch(JSON.stringify(error), /secret-test/);
+    return true;
+  });
 });
