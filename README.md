@@ -1,6 +1,58 @@
-# Gitea Workspace
+# Commit Gitea
+
+> Proyecto construido con **OpenCode + ChatGPT Codex**.
 
 Interfaz web para explorar las carpetas de primer nivel de una ruta local e inicializar sus repositorios Git y enviarlos a Gitea.
+
+Captura de la aplicación:
+![Captua](./captua_commit_gitea.png)
+
+## Inicio rápido
+
+### 1. Crear `docker-compose.yml`
+
+Usa esta configuración:
+
+```yaml
+services:
+  commit_gitea:
+    image: ar0per0/web_commit_gitea:latest
+    init: true
+    restart: unless-stopped
+    user: "1000:1000"
+    group_add:
+      - "0"
+    ports:
+      - "8804:8804"
+    environment:
+      TZ: "Europe/Madrid"
+      WEB_PASSWORD: "web_password"
+      GITEA_USER: "gitea_user"
+      GITEA_EMAIL: "gitea_email"
+      GITEA_TOKEN: "gitea_token"
+      GITEA_URL: "https://gitea.example.com/"
+    volumes:
+      - "./data:/data"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+```
+
+### 2. Levantar
+
+Ejecuta:
+
+```bash
+docker compose up -d
+```
+Acceso:
+
+```text
+http://IP_DEL_EQUIPO:8804
+```
+
+---
+
+
+
 
 ## Iniciar
 
